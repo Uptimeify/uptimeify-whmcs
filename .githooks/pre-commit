@@ -1,0 +1,90 @@
+#!/bin/bash
+# Secret scan on staged changes: blocks the common forms of credentials and API tokens
+# before they end up in a commit (and in the public history).
+set -euo pipefail
+
+if [ "${SKIP_SECRET_SCAN:-0}" = "1" ]; then
+  exit 0
+fi
+
+# Only scan added lines of staged text changes.
+staged_diff=$(git diff --cached --unified=0 --no-color | grep '^+' | grep -v '^+++' || true)
+[ -z "$staged_diff" ] && exit 0
+
+fail=0
+check() {
+  local label="$1" pattern="$2"
+  local hits
+  hits=$(printf '%s\n' "$staged_diff" | grep -E -n -e "$pattern" | head -5 || true)
+  if [ -n "$hits" ]; then
+    echo "❌ possible secret ($label):"
+    printf '%s\n' "$hits" | sed 's/^/   /'
+    fail=1
+  fi
+}
+
+# Obvious placeholders. A rule that fires on every documentation placeholder gets ignored
+# and then protects nothing. Deliberately no blanket exception for test or fixture files:
+# a real token in a test is exactly as leaked as one in production code.
+placeholder_value='(example|placeholder|changeme|dummy|redacted|your-|your_|fake)'
+
+# Checks only the part after the first assignment character: a harmless-looking variable
+# name (EXAMPLE_TOKEN=...) must not cover a real value.
+is_placeholder_assignment() {
+  local match="$1"
+  local value="${match#*[:=]}"
+  printf '%s' "$value" | grep -q -i -E -e "$placeholder_value"
+}
+
+# Like check(), but drops hits whose assigned value is a placeholder.
+check_assignment() {
+  local label="$1" pattern="$2"
+  local hits="" line match
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    match=$(printf '%s' "$line" | grep -o -E -e "$pattern" | head -1 || true)
+    [ -z "$match" ] && continue
+    if is_placeholder_assignment "$match"; then
+      continue
+    fi
+    hits="${hits}${line}"$'\n'
+  done <<EOF
+$(printf '%s\n' "$staged_diff" | grep -E -n -e "$pattern" || true)
+EOF
+  if [ -n "$hits" ]; then
+    echo "❌ possible secret ($label):"
+    printf '%s' "$hits" | head -5 | sed 's/^/   /'
+    fail=1
+  fi
+}
+
+check "private key block"        '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'
+check "connection string w/ pw"  '(postgres(ql)?|mysql|redis|amqp|mongodb)://[^:/@"]+:[^@"]{4,}@'
+check "AWS access key"           'AKIA[0-9A-Z]{16}'
+check "Slack token"              'xox[baprs]-[0-9A-Za-z-]{10,}'
+check "GitHub token"             'gh[pousr]_[0-9A-Za-z]{30,}'
+check "Stripe/OpenAI-style key"  '\b(sk|rk)_(live|test)?_?[0-9A-Za-z]{20,}'
+check "Mollie live key"          '\blive_[0-9A-Za-z]{25,}'
+# Matrix access token.
+check "Matrix access token"      'syt_[A-Za-z0-9_-]{20,}'
+# Uptimeify API token (the addon stores and sends these).
+check "Uptimeify API token"      'wsm_[A-Za-z0-9]{20,}'
+
+check_assignment "assigned password/secret" '(PASSWORD|SECRET|API_KEY|DQS_KEY|TOKEN)[A-Z_]*[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"'$\{<]{12,}["'"'"']'
+# Assignment WITHOUT quotes, the form of .env files, docker-compose and shell scripts
+# (the quoted rule above needs quotes, an .env line has none).
+# Excluded: variable references ($FOO, ${FOO}, ${FOO:-}, \${FOO}), angle-bracket
+# placeholders (<your-token>) and empty values, which are not secrets.
+# No space before the assignment character: .env, YAML and shell write KEY=value or
+# KEY: value. ' = ' with spaces is code, with an identifier or a regex on the right, not a
+# plain-text secret; quoted literals in code are still caught by the rule above.
+# No '<' in the value: those are type annotations like Record<...>, not secrets.
+check_assignment "assigned secret (unquoted)" '(PASSWORD|SECRET|API_KEY|DQS_KEY|TOKEN)[A-Z_]*[:=][[:space:]]*[^[:space:]"'"'"'$<\][^[:space:]"'"'"'<]{11,}'
+
+if [ "$fail" = "1" ]; then
+  echo ""
+  echo "Commit blocked. Move the value to .env / GitHub secrets. If this is a false"
+  echo "positive, use an obvious placeholder value instead (e.g. your-token-here)."
+  exit 1
+fi
+exit 0

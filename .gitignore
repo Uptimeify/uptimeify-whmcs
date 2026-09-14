@@ -1,0 +1,13 @@
+/vendor/
+/dist/
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/.env*
+!/.env.sandbox.example
+/docker/whmcs/
+/docker/data/
+# Internal working material, kept local only
+/.claude/
+/CLAUDE.md
+/docs/superpowers/
+.DS_Store

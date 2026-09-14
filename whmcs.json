@@ -1,0 +1,35 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-addons",
+  "name": "uptimeify",
+  "license": "MIT",
+  "version": "0.1.0",
+  "category": "utilities",
+  "description": {
+    "name": "Uptimeify",
+    "tagline": "Mirror WHMCS clients and domains to Uptimeify uptime, domain-expiry and blacklist monitoring.",
+    "long": "Connect one organization API token and every active hosting domain and registered domain in WHMCS gets monitored in Uptimeify under the matching customer. Provisioning, suspension and termination are mirrored automatically via hooks and cron; clients see their monitors read-only in the client area. Free and open source.",
+    "features": [
+      "Mirrors WHMCS clients 1:1 to Uptimeify customers",
+      "Website, domain-expiry, DNS and DNSBL monitors, each switchable",
+      "Hook-driven queue plus daily reconcile",
+      "Non-destructive: only monitors the addon created are ever deleted",
+      "Read-only client-area monitoring page",
+      "White-label brand name"
+    ]
+  },
+  "logo": {
+    "filename": "logo.png"
+  },
+  "support": {
+    "homepage": "https://uptimeify.io",
+    "support_url": "https://github.com/Uptimeify/uptimeify-whmcs/issues",
+    "docs_url": "https://github.com/Uptimeify/uptimeify-whmcs#readme"
+  },
+  "authors": [
+    {
+      "name": "Uptimeify",
+      "homepage": "https://uptimeify.io"
+    }
+  ]
+}

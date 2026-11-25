@@ -11,6 +11,8 @@ final class ClientRow
         public readonly string $email,
         public readonly string $displayName,
         public readonly string $status,
+        /** tblclients.language as WHMCS stores it (`german`, `english`, …; '' = system default). */
+        public readonly string $language = '',
     ) {
     }
 
@@ -28,6 +30,7 @@ final class ClientRow
             mb_strtolower(trim((string) ($row['email'] ?? '')), 'UTF-8'),
             $company !== '' ? $company : $person,
             (string) ($row['status'] ?? 'Active'),
+            mb_strtolower(trim((string) ($row['language'] ?? '')), 'UTF-8'),
         );
     }
 }

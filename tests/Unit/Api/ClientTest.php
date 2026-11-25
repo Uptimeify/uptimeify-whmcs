@@ -161,6 +161,28 @@ final class ClientTest extends TestCase
         self::assertSame([], (new Client((new FakeHttpClient())->on('GET', '/api/custom-fields', 200, []), 'https://api.test', self::BEARER))->listCustomFieldDefinitions());
     }
 
+    public function testCustomFieldDefinitionsAskForTheItemsEnvelopeAndReadIt(): void
+    {
+        $this->http->on('GET', '/api/custom-fields', 200, ['items' => [['id' => 1, 'fieldKey' => 'contract']], 'total' => 1, 'page' => 1, 'perPage' => 1]);
+        self::assertSame([1], array_column($this->client()->listCustomFieldDefinitions(), 'id'));
+        self::assertSame('https://api.test/api/custom-fields?envelope=items', $this->http->requests()[0]['url']);
+    }
+
+    public function testUnpagedListsAcceptTheItemsEnvelopeToo(): void
+    {
+        $this->http
+            ->on('GET', '/api/tags', 200, ['items' => [['id' => 4, 'name' => 'whmcs']], 'total' => 1, 'page' => 1, 'perPage' => 1])
+            ->on('GET', '/api/package-configs', 200, ['items' => [], 'total' => 0, 'page' => 1, 'perPage' => 0]);
+        self::assertSame([4], array_column($this->client()->listTags(), 'id'));
+        self::assertSame([], $this->client()->listPackageConfigs());
+    }
+
+    public function testItemsEnvelopeWithFewerRowsThanTotalIsInvalid(): void
+    {
+        $this->http->on('GET', '/api/tags', 200, ['items' => [['id' => 4]], 'total' => 2, 'page' => 1, 'perPage' => 1]);
+        $this->assertInvalidResponse(fn () => $this->client()->listTags(), 'paged list: 1 of 2 rows');
+    }
+
     public function testListCustomersWalksAllPages(): void
     {
         $http = self::pagedHttp([['publicId' => 'c1'], ['publicId' => 'c2'], ['publicId' => 'c3']], 2);
@@ -447,6 +469,15 @@ final class ClientTest extends TestCase
         self::assertSame('application/json', $this->http->requests()[0]['headers']['Content-Type']);
     }
 
+    public function testCreateCustomerSendsEmailLanguageOnlyWhenGiven(): void
+    {
+        $this->http->on('POST', '/api/customers', 200, ['success' => true, 'customer' => ['publicId' => 'c1']]);
+        $this->client()->createCustomer('Acme', 'ops@acme.test', 'pro', [], 'de');
+        self::assertSame('de', $this->http->lastJson()['emailLanguage'] ?? null);
+        $this->client()->createCustomer('Acme', 'ops@acme.test', 'pro', []);
+        self::assertArrayNotHasKey('emailLanguage', $this->http->lastJson() ?? []);
+    }
+
     public function testEmptyCustomFieldsAreSentAsObject(): void
     {
         $this->http->on('POST', '/api/websites', 200, ['publicId' => 'w1']);
@@ -561,6 +592,34 @@ final class ClientTest extends TestCase
         self::assertSame(['customerId' => 'c1', 'name' => 'example.com', 'hostname' => 'example.com', 'dnsConfig' => $config], $this->http->lastJson());
     }
 
+    public function testCreateAnsweredWithMonitorAlreadyExistsReturnsTheExistingMonitorAsDeduplicated(): void
+    {
+        $conflict = ['statusCode' => 409, 'statusMessage' => 'A monitor for this target already exists for this customer.', 'data' => ['code' => 'monitorAlreadyExists', 'existingId' => 7, 'existingPublicId' => 'old/1']];
+        $this->http
+            ->on('POST', '/api/websites', 409, $conflict)
+            ->on('GET', '/api/websites/old%2F1', 200, ['id' => 7, 'publicId' => 'old/1', 'url' => 'https://example.com'])
+            ->on('POST', '/api/dns-monitors', 409, $conflict)
+            ->on('GET', '/api/dns-monitors/old%2F1', 200, ['id' => 7, 'publicId' => 'old/1', 'hostname' => 'example.com']);
+
+        $website = $this->client()->createWebsite('c1', 'example.com', 'https://example.com', 'combined', 5, []);
+        self::assertSame(['old/1', true], [$website['publicId'], $website['deduplicated']]);
+        $dns = $this->client()->createDnsMonitor('c1', 'example.com', 'example.com', ['rrtypes' => ['A']]);
+        self::assertSame(['old/1', 'example.com', true], [$dns['publicId'], $dns['hostname'], $dns['deduplicated']]);
+        self::assertArrayNotHasKey('allowDuplicate', json_decode((string) $this->http->requests()[0]['body'], true));
+    }
+
+    public function testA409WithoutAnExistingPublicIdStaysAnApiExceptionWithItsData(): void
+    {
+        $this->http->on('POST', '/api/websites', 409, ['statusCode' => 409, 'data' => ['code' => 'monitorAlreadyExists', 'existingId' => 7]]);
+        try {
+            $this->client()->createWebsite('c1', 'example.com', 'https://example.com', 'combined', 5, []);
+            self::fail('expected ApiException');
+        } catch (ApiException $e) {
+            self::assertSame([409, 'monitorAlreadyExists', 7], [$e->status, $e->errorCode, $e->data['existingId'] ?? null]);
+        }
+        self::assertCount(1, $this->http->requests());
+    }
+
     public function testTagsListCreateAndAssign(): void
     {
         $this->http
@@ -628,7 +687,7 @@ final class ClientTest extends TestCase
 
     public function testListEndpointRejectsObject(): void
     {
-        $this->http->on('GET', '/api/tags', 200, ['items' => [['id' => 1]]]);
+        $this->http->on('GET', '/api/tags', 200, ['tags' => [['id' => 1]]]);
         $this->assertInvalidResponse(fn () => $this->client()->listTags(), 'expected a JSON array');
     }
 

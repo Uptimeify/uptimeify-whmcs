@@ -92,6 +92,22 @@ final class SnapshotBuilderTest extends DbTestCase
         self::assertSame($org['refreshedAt'], $c1['refreshedAt']);
     }
 
+    public function testIncidentsAreReadFromTheCamelCaseFieldsOnceTheSnakeCaseTwinsAreGone(): void
+    {
+        $customers = new CustomerMap();
+        $customers->set(1, 'c1', null, 'manual');
+        $incidents = [
+            ['id' => 1, 'publicId' => 'i-open', 'status' => 'open', 'startedAt' => '2027-01-19T10:00:00Z', 'resolvedAt' => null, 'website' => ['publicId' => 'w1'], 'customer' => ['publicId' => 'c1']],
+            ['id' => 2, 'publicId' => 'i-done', 'status' => 'open', 'startedAt' => '2027-01-19T09:00:00Z', 'resolvedAt' => '2027-01-19T09:30:00Z', 'website' => ['publicId' => 'w1'], 'customer' => ['publicId' => 'c1']],
+            ['id' => 3, 'publicId' => 'i-both', 'status' => 'open', 'startedAt' => '2027-01-10T08:00:00Z', 'started_at' => 'old', 'resolvedAt' => null, 'resolved_at' => null, 'website' => ['publicId' => 'w1'], 'customer' => ['publicId' => 'c1']],
+        ];
+
+        $c1 = SnapshotBuilder::build(new RemoteIndex(), $incidents, new MonitorMap(), $customers)['clients'][1];
+
+        self::assertSame(['i-open', 'i-both'], array_column($c1['incidents'], 'publicId'), 'resolvedAt set = not open');
+        self::assertSame(['2027-01-19T10:00:00Z', '2027-01-10T08:00:00Z'], array_column($c1['incidents'], 'startedAt'), 'startedAt wins over started_at');
+    }
+
     public function testUnknownStatusWhenMappedMonitorIsNotInTheIndexAndIncidentsUnavailableFlag(): void
     {
         $customers = new CustomerMap();

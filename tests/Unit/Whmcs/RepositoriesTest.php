@@ -28,7 +28,7 @@ final class RepositoriesTest extends DbTestCase
 
     public function testClientRowTrimsNamesAndEmail(): void
     {
-        $a = $this->insert('tblclients', ['firstname' => '  Ada ', 'lastname' => '', 'companyname' => '   ', 'email' => ' Ada@Example.COM ']);
+        $a = $this->insert('tblclients', ['firstname' => '  Ada ', 'lastname' => '', 'companyname' => '   ', 'email' => ' Ada@Example.COM ', 'language' => ' German ']);
         $b = $this->insert('tblclients', ['firstname' => '', 'lastname' => 'Lovelace', 'companyname' => ' ACME GmbH ']);
         $c = $this->insert('tblclients', ['email' => ' JÜRGEN@Müller.EXAMPLE ']);
         $repo = new ClientRepository();
@@ -38,7 +38,11 @@ final class RepositoriesTest extends DbTestCase
         self::assertSame('Ada', $client->displayName);
         self::assertSame('ada@example.com', $client->email);
         self::assertSame('Active', $client->status);
-        self::assertSame('ACME GmbH', $repo->find($b)?->displayName);
+        self::assertSame('german', $client->language);
+        $second = $repo->find($b);
+        self::assertNotNull($second);
+        self::assertSame('', $second->language, 'no language = WHMCS default');
+        self::assertSame('ACME GmbH', $second->displayName);
         self::assertSame('jürgen@müller.example', $repo->find($c)?->email);
         self::assertSame([$a, $b, $c], array_keys($repo->all()));
     }

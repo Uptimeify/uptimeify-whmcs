@@ -29,6 +29,9 @@ final class CustomerMirror
     /** Message of the RuntimeException thrown when a customer must be created and no default package is set. */
     public const NO_DEFAULT_PACKAGE_MESSAGE = 'default package not configured';
 
+    /** WHMCS client language => `emailLanguage` of the new customer; any other language leaves it to the organization. */
+    private const EMAIL_LANGUAGES = ['german' => 'de', 'english' => 'en', 'danish' => 'da'];
+
     public function __construct(
         private readonly Client $api,
         private readonly Settings $settings,
@@ -170,7 +173,7 @@ final class CustomerMirror
         }
         $name = $client->displayName !== '' ? $client->displayName : 'whmcs-client-' . $client->id;
         /** @var array<string,mixed> $created */
-        $created = $this->guard->run(fn (): array => $this->api->createCustomer($name, $client->email, $package, ['whmcs_client_id' => (string) $client->id]));
+        $created = $this->guard->run(fn (): array => $this->api->createCustomer($name, $client->email, $package, ['whmcs_client_id' => (string) $client->id], self::EMAIL_LANGUAGES[$client->language] ?? null));
         $publicId = is_string($created['publicId'] ?? null) ? $created['publicId'] : '';
         if ($publicId === '') {
             throw new ApiException('uptimeify API returned an unexpected response for POST /api/customers: no publicId', 0, Client::INVALID_RESPONSE_CODE);

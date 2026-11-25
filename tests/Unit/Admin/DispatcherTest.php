@@ -153,7 +153,7 @@ final class DispatcherTest extends DbTestCase
         $this->http->on('GET', '/api/organization', 200, ['id' => 1, 'publicId' => 'o-sandbox', 'name' => 'Sandbox Org']);
         $this->http->on('GET', '/api/custom-fields', 200, []);
         $this->handle(['action' => 'connect'], ['api_token' => 'wsm_abc', 'api_base_url' => 'http://host.docker.internal:3001/'], 'POST');
-        self::assertSame(['http://host.docker.internal:3001/api/organization', 'http://host.docker.internal:3001/api/custom-fields'], array_column($this->http->requests(), 'url'));
+        self::assertSame(['http://host.docker.internal:3001/api/organization', 'http://host.docker.internal:3001/api/custom-fields?envelope=items'], array_column($this->http->requests(), 'url'));
         self::assertSame('http://host.docker.internal:3001', (new Settings())->apiBaseUrl());
         self::assertTrue((new Settings())->isConnected());
     }

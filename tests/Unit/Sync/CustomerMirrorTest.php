@@ -121,6 +121,18 @@ final class CustomerMirrorTest extends DbTestCase
         self::assertStringContainsString('cnew', $GLOBALS['uptimeify_test']['activity'][0][0] ?? '');
     }
 
+    public function testCreateMapsTheClientLanguageToEmailLanguageOrOmitsIt(): void
+    {
+        $this->http->on('POST', '/api/customers', 200, ['success' => true, 'customer' => ['publicId' => 'cnew', 'packageType' => 'starter']]);
+        foreach (['german' => 'de', 'english' => 'en', 'danish' => 'da', 'french' => null, '' => null] as $language => $expected) {
+            (new CustomerMap())->remove(7);
+            $this->mirror()->resolve(new ClientRow(7, 'n@example.com', 'New', 'Active', $language), new RemoteIndex(), true);
+            $sent = $this->lastBody('POST');
+            self::assertSame($expected, $sent['emailLanguage'] ?? null, 'language ' . $language);
+            self::assertSame($expected !== null, array_key_exists('emailLanguage', $sent), 'omitted when nothing maps');
+        }
+    }
+
     public function testCreateUsesNameFallbackAndEmptyEmailWhenClientHasNone(): void
     {
         $index = $this->index([['publicId' => 'cblank', 'name' => '', 'email' => '']]);

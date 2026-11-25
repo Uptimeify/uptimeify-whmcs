@@ -58,7 +58,8 @@ Errors are JSON of this shape:
 | `GET /api/customer-domains` | always `{items,total,page,perPage}` | same | 50 / 200 |
 | `GET /api/customer-ips` | always `{items,total,page,perPage}` | same | 50 / 200 |
 | `GET /api/incidents` | plain array | `limit`/`offset`; with `includeTotal=1` `{incidents,total,limit,offset}` | limit 100 / 500 |
-| `GET /api/tags`, `GET /api/package-configs`, `GET /api/custom-fields` | plain array, not paginated | n/a | n/a |
+| `GET /api/tags`, `GET /api/package-configs` | plain array, not paginated | n/a | n/a |
+| `GET /api/custom-fields` | plain array; with `?envelope=items` `{items,total,page,perPage}` as one page with every row | n/a | n/a |
 
 The client pages every paginated list with `page=N&perPage=100&sortBy=createdAt&sortOrder=asc` (valid on all five list
 endpoints), and the incidents with `offset` += rows received, until the rows received reach `total` (re-read on every
@@ -79,6 +80,13 @@ Offset paging can also silently *skip* a row when another row is deleted during 
 one position forward). A remote row missing from one run's lists is therefore not proof that it is gone: the reconcile
 never takes a destructive action (delete the map row, recreate the monitor) on a row missing in a single run; it
 confirms with a direct `GET` of that resource or waits for a second run.
+
+**List form (API decision of 20.10.2026).** Plain-array lists move to `{items, …}`: opt in with `?envelope=items`,
+which becomes the default after the announcement period. Of the three unpaged lists the addon reads, only
+`GET /api/custom-fields` takes the parameter so far (`/api/tags` and `/api/package-configs` ignore it and answer the
+plain array). The client sends `?envelope=items` on the custom-fields read and accepts both forms on all three; an
+envelope whose `total` is larger than its `items` (a list that really pages) is refused as `invalidResponse`, never
+returned truncated.
 
 ### Client-side response checks (`lib/Api/Client.php`)
 
@@ -101,12 +109,19 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
 | `generic` + `statusMessage` starting `Active IP limit reached` | 403 | `POST /api/customers/:id/ips`, `PATCH /api/customer-ips/:id` (activation) | `QuotaExceededException`, `errorCode` = `activeIpLimitReached` (client-side name, see below) |
 | `invalidUrl` | 400 | `POST /api/websites`, `PATCH /api/websites/:id` | `ApiException`, `errorCode` = the code |
 | `invalidPackageType` | 400 | `POST /api/customers`, `PATCH /api/customers/:id` | `ApiException`, `errorCode` = the code |
+| `monitorAlreadyExists` | 409 | `POST /api/websites`, `POST /api/dns-monitors` (same target, type and customer) | not an error for the caller: the client reads `data.existingPublicId` and returns that monitor with `deduplicated: true` |
+| `targetHostMonitorLimitReached` | 403 | monitor create, and a PATCH that changes the host: the organization has 100 monitors on that target host | `ApiException`, `errorCode` = the code; fatal for the job |
+| `targetHostPlatformLimitReached` | 403 | same, 300 monitors on that host across all organizations | `ApiException`, `errorCode` = the code; fatal for the job |
 | `customerNotFound`, `websiteNotFound`, `monitorNotFound`, `customerDomainNotFound`, `customerIpNotFound`, `tagNotFound`, `organizationNotFound`, or none | 404 | endpoints addressing a resource | `NotFoundException` (by status) |
 | none | 429 | rate limit | `RateLimitedException` with `Retry-After` |
 
 - `selfServiceQuotaReached` and `selfServiceNotAllowed` are only raised for customer-restricted access. An
   organization-wide token never sees them, so the client does not map them to quota.
 - `paidQuotaUpgradeNotAuthorized` is not raised for API tokens.
+- **Target host limits** count every monitor type on one host (websites by URL host or `connectHost`, protocol
+  monitors by hostname, case-insensitive); heartbeat and playwright are exempt. `data` also carries `host` and
+  `limit`. They are no customer quota (`QuotaExceededException` is not used), and a retry cannot lift them: only
+  removing monitors on that host or Uptimeify support can.
 - **IP-limit message prefix.** The IP limit has no code of its own (`data.code: "generic"`). The exact text is
   `Active IP limit reached. Your <organization IP quota|customer package> allows maximum <n> active IPs for DNSBL monitoring. Please disable an IP or upgrade your package.`
   The client matches only `status === 403 && code === 'generic' && statusMessage` starting with
@@ -144,7 +159,8 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
   `summary=1`, `fields=minimal` (plain array `id,publicId,name,status,customFields`; takes precedence over `page`).
 - Response with `page`: `{ items, total, page, perPage, packageOptions? }`. Item fields: `id` (int), `publicId`
   (uuid), `organizationId`, `name`, `email` (string|null), `customFields` (object), `packageId` (int|null),
-  `packageDisplayName`, `status` (`active`, `inactive`, `marked_for_cancellation`, …), `monitorCount`, `createdAt`.
+  `packageDisplayName`, `status` (`active` or `inactive`, nothing else; a pending cancellation shows in
+  `cancellationDate` / `cancelledAt`), `monitorCount`, `createdAt`.
   **No `packageType`** in list items.
 
 ### `POST /api/customers`
@@ -153,8 +169,10 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
 - Body: `name` (string, required non-empty after trim, else 400 `invalidRequestBody`), `email` (string, optional),
   `packageType` (string: package key, else a package `displayName`) **or** `packageId` (int) — one of them required
   (400 `invalidRequestBody`), unknown → 400 `invalidPackageType`; `customFields` (any JSON, stored verbatim, **not
-  validated against custom-field definitions**), `status` (optional, default `active`), `monthlyReportsEnabled`,
-  notification fields (unused).
+  validated against custom-field definitions**), `status` (optional, `active`|`inactive`, default `active`),
+  `emailLanguage` (`de`|`en`|`da` or null = organization language; the addon maps the WHMCS client language
+  `german`/`english`/`danish` and leaves the key out for any other), `monthlyReportsEnabled`, notification fields
+  (unused).
 - Response: HTTP 200 `{ "success": true, "customer": { … } }`. Customer fields: `id`, `publicId`, `organizationId`,
   `name`, `email`, `packageId`, `packageType`, `status`, `customFields`, …
 - Errors also: 403 `quotaRequired`, 403 `billingSetupRequired`, 404 `organizationNotFound`, 500
@@ -199,12 +217,18 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
   (`combined` default, `http_status`, `ssl_check`, `playwright`, `heartbeat`, `dns`), `checkInterval` (int
   **minutes**, 1..1440 for non-heartbeat, default 30; below the package's `checkIntervalMinutes` → 400
   `checkIntervalTooLow`), `customFields` (object of arbitrary keys, stored verbatim, **no definition needed**),
-  optional `status` (`active` default).
+  optional `status` (`active` default), `allowDuplicate` (bool, never sent).
 - Response: HTTP 200, **plain website object** (no envelope): `id` (int), `publicId`, `customerId` (int), `name`, `url`,
   `monitoringType`, `status`, `checkInterval`, `customFields`, …
-- Errors: 400 `invalidUrl` (see below), 400 validation, 400 `checkIntervalTooLow`, 403 quota codes, 403
-  `noActiveSubscription`, 404 `customerNotFound` or code-less, 500 `websiteCreationFailed`.
-- No deduplication: a repeated POST creates a second website.
+- Errors: 400 `invalidUrl` (see below), 400 validation, 400 `checkIntervalTooLow`, 403 quota codes, 403 target host
+  limits, 403 `noActiveSubscription`, 404 `customerNotFound` or code-less, 409 `monitorAlreadyExists`, 500
+  `websiteCreationFailed`.
+- **Deduplication by 409.** A website of the same customer with the same `monitoringType`, the same
+  `connectHost`/`connectPort` and the same normalized URL (scheme and host lower-cased, default port and trailing
+  slash dropped, fragment ignored, query kept) is refused with **409 `monitorAlreadyExists`**,
+  `data: { code, existingId, existingPublicId }`; heartbeat and playwright are never duplicates. `allowDuplicate: true`
+  would create it anyway; the addon never sends it and adopts the existing monitor instead
+  (`GET /api/websites/:existingPublicId`, then the same path as a `deduplicated` domain or IP).
 - **`invalidUrl` is not only a private target.** The API refuses a URL that does not parse with protocol, a scheme
   other than `http`/`https`, an IP literal in a private or reserved range, a localhost or local-only hostname, **and a
   hostname that does not resolve** in DNS (no answer or a lookup error) or resolves to a private or loopback address.
@@ -280,8 +304,11 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
   (`active`,`inactive`,`maintenance`,`disabled`; stored as `active`|`maintenance`|`disabled`), `checkInterval`
   (1..1440), `timeoutSeconds`, `allowedCheckCountryCodes`.
 - Response: HTTP 200, **plain dns-monitor object**: `id`, `publicId`, `organizationId`, `customerId` (int), `name`,
-  `hostname`, `status`, `dnsConfig`, … DNS monitors have no `customFields`. No deduplication.
-- Errors: 403 quota codes, 404 `customerNotFound`/no code.
+  `hostname`, `status`, `dnsConfig`, … DNS monitors have no `customFields`.
+- Errors: 403 quota codes, 403 target host limits, 404 `customerNotFound`/no code, 409 `monitorAlreadyExists`.
+- **Deduplication by 409**, like websites: same customer, same hostname (lower-cased, without trailing dot) and the
+  same set of `rrtypes` → 409 `monitorAlreadyExists` with `data.existingPublicId`; the addon adopts that monitor
+  (`GET /api/dns-monitors/:existingPublicId`).
 
 ### `GET /api/dns-monitors?page=N&perPage=100`
 
@@ -340,10 +367,13 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
   **No status, customer or sort parameter.** Ordered by start time, newest first.
 - Response with `includeTotal=1`: `{ incidents, total, limit, offset }`. Item fields: `id`, `publicId`, `websiteId`
   (int|null), `status` (`open`|`acknowledged`|`resolved`), `severity` (the incident type, e.g. `downtime`), `source`,
-  `title`, `started_at` (**snake_case** ISO), `resolved_at` (ISO|null), `error_message`, `status_code`, `website` (null
+  `title`, `startedAt` (ISO), `resolvedAt` (ISO|null), `errorMessage`, `statusCode`, `website` (null
   or `{id, publicId, name, url, status}`), `monitor` (null or `{name, hostname, publicId, kind}` for dns/icmp/…),
   `customer` (null or `{id, publicId, email, company}`).
-- "Open" as the Uptimeify dashboard counts it: `status` is `open` or `acknowledged` and `resolved_at` is null.
+- **Removed on 18.01.2027:** the snake_case twins `started_at`, `resolved_at`, `last_notified_at`, `error_message`,
+  `status_code`, `response_time_ms`. Until then each stands next to its camelCase successor. The addon reads
+  `startedAt` / `resolvedAt` first and the twin only as a fallback.
+- "Open" as the Uptimeify dashboard counts it: `status` is `open` or `acknowledged` and `resolvedAt` is null.
 - Because there is no open or customer filter, the addon reads at most `Sync\IncidentWindow::PAGES` (2) pages of 500,
   newest first, everywhere, and flags the snapshots `incidentsComplete=false` when more exist. There is no unbounded
   incident walk in the client.
@@ -375,7 +405,8 @@ A request body that cannot be JSON-encoded (invalid UTF-8) throws `errorCode = '
 ### `GET /api/custom-fields` (scope probe) / `POST /api/custom-fields` (not used)
 
 - `GET /api/custom-fields`: 401 `unauthorized` without a valid token; response **plain array** of the organization's
-  active custom-field definitions, ordered by display order (empty array when there are none); optional
+  active custom-field definitions, ordered by display order (empty array when there are none), or with
+  `?envelope=items` (what the addon sends) `{ items, total, page: 1, perPage }` holding every row; optional
   `organizationId` query (not sent).
 - A customer-bound token gets **403 `customerScopedTokenForbidden`** for every method on `/api/custom-fields`, while an
   organization-wide token (any role) reads it. The connect handshake calls it right after `GET /api/organization` to
@@ -405,7 +436,9 @@ Customer domains, customer IPs and DNS monitors have **no** `customFields`; they
 | `POST /api/websites` returns `{website: …}`, HTTP 201 | plain object, HTTP 200 |
 | domain/IP create return an envelope | plain object with `deduplicated` |
 | DNS monitor create returns an envelope | plain object |
-| `GET /api/tags` returns `items`/`tags` | plain array |
+| A repeated website or DNS monitor POST creates a second monitor | 409 `monitorAlreadyExists` with `data.existingPublicId` |
+| A customer can be `marked_for_cancellation` | `status` is `active` or `inactive` only |
+| `GET /api/tags` returns `items`/`tags` | plain array today, `{items, …}` once the envelope is the default; the client reads both |
 | `GET /api/websites` / `GET /api/dns-monitors` may be a plain array without `page` | always `{items,total,page,perPage}`, max 200 |
 | `POST /api/tags {name:"whmcs"}` conflicts when the tag exists | no uniqueness, a duplicate tag is created; list and reuse |
 | `POST /api/monitor-tags` accepts a tag publicId | `tagId` and `monitorId` must be positive ints |
@@ -416,7 +449,7 @@ Customer domains, customer IPs and DNS monitors have **no** `customFields`; they
 | `rawurlencode` makes `apiTokenPathAmbiguous` impossible | encoding `/` yields `%2F`, which the path guard refuses; UUIDs are unaffected |
 | Domain create must not send `status` | `status` is accepted (`active`|`disabled`, default `active`); `expiryWarningDays`/`expiryErrorDays` are optional with defaults 30/7 |
 | DNS config `matchMode:'any'`, `triggerOn:'no_answer'`, no expected values | `matchMode` is `exact`|`contains`; `triggerOn` is `{resolveError, mismatch}`; every rrtype needs at least one expected value |
-| Open incidents are `status=open` | open = `open` or `acknowledged` with `resolved_at` null; the start time is `started_at` |
+| Open incidents are `status=open` | open = `open` or `acknowledged` with `resolvedAt` null; the start time is `startedAt` (the snake_case twins go on 18.01.2027) |
 | Custom-field definitions are required before writing `customFields` | not checked by customer/website writes |
 | The DNS monitor list can be filtered per customer by publicId | the `customerId` query is int only |
 | Customer list items carry `packageType` | only `packageId` + `packageDisplayName` |

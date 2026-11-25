@@ -19,9 +19,14 @@ All notable changes to this project are documented here. The format follows
 - Read-only "Refresh status" dashboard action; bounded incident window with an "open incidents may be incomplete" note.
 - Client area, navigation item and product block limited to the account owner, "Login as Owner" and users with the products permission.
 - `ServiceEdit` and `DomainEdit` hooks queue a sync, so admin edits of a service or domain arrive with the next queue run.
+- New customers get the mail language of their WHMCS client (German, English, Danish); any other language keeps the organization's.
+- A website or DNS monitor the API reports as already existing (409 `monitorAlreadyExists`) is adopted instead of failing the job.
 
 ### Changed
 - Configuration changes never delete: a customer filter, a type switched off, an ignored target or a disabled server detaches the monitor and leaves it untouched in Uptimeify; "Ignore" on the dashboard detaches instead of pausing.
 - WHMCS end events delete only monitors the addon created; adopted websites are paused, other adopted monitors detached.
 - A deleted WHMCS client's customer mapping and cached status are removed; the Uptimeify customer is never deleted.
+- Incidents are read from `startedAt` / `resolvedAt`; the snake_case fields the API removes on 18.01.2027 are only a fallback.
+- Unpaged lists (custom fields, tags, packages) are accepted as a plain array and as `{items, …}`; the connect handshake asks for the new form.
+- The target host limits (`targetHostMonitorLimitReached`, `targetHostPlatformLimitReached`) end a job at once with a plain reason instead of being retried.
 - `invalidUrl` is retried with limits (job backoff, once per daily reconcile), because a domain that does not resolve yet is refused with the same code as a private address.

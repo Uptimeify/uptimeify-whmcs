@@ -35,6 +35,12 @@ final class Client
 
     public const SCOPE_FORBIDDEN_CODE = 'customerScopedTokenForbidden';
 
+    /** 409 on website and DNS monitor create: same target, type and customer; `data.existingPublicId` names the monitor. */
+    public const MONITOR_EXISTS_CODE = 'monitorAlreadyExists';
+
+    /** 403 on monitor create and on a host change: too many monitors on one target host (organization, platform). */
+    public const TARGET_HOST_LIMIT_CODES = ['targetHostMonitorLimitReached', 'targetHostPlatformLimitReached'];
+
     /** 400 on customer create/patch: the package key or name does not exist (a setup error, spec §5). */
     public const INVALID_PACKAGE_TYPE_CODE = 'invalidPackageType';
 
@@ -81,7 +87,7 @@ final class Client
      */
     public function listCustomFieldDefinitions(): array
     {
-        return $this->listOf('GET', '/api/custom-fields');
+        return $this->listOf('GET', '/api/custom-fields?envelope=items');
     }
 
     // ---- customers ----------------------------------------------------------------
@@ -100,16 +106,17 @@ final class Client
 
     /**
      * @param array<string,scalar> $customFields
+     * @param string|null $emailLanguage `de`, `en` or `da`; null leaves the key out (the organization language applies)
      * @return array<mixed>
      */
-    public function createCustomer(string $name, string $email, string $packageType, array $customFields): array
+    public function createCustomer(string $name, string $email, string $packageType, array $customFields, ?string $emailLanguage = null): array
     {
         $data = $this->object('POST', '/api/customers', [
             'name' => $name,
             'email' => $email,
             'packageType' => $packageType,
             'customFields' => (object) $customFields,
-        ]);
+        ] + ($emailLanguage === null ? [] : ['emailLanguage' => $emailLanguage]));
         if (!is_array($data['customer'] ?? null) || $data['customer'] === [] || array_is_list($data['customer'])) {
             throw self::invalidResponse('POST /api/customers', 'no customer object');
         }
@@ -140,11 +147,11 @@ final class Client
 
     /**
      * @param array<string,scalar> $customFields
-     * @return array<mixed>
+     * @return array<mixed> the website row; with `deduplicated: true` when the API named an existing one (409)
      */
     public function createWebsite(string $customerPublicId, string $name, string $url, string $monitoringType, int $checkInterval, array $customFields): array
     {
-        return $this->object('POST', '/api/websites', [
+        return $this->createOrExisting('/api/websites', [
             'customerId' => $customerPublicId,
             'name' => $name,
             'url' => $url,
@@ -224,11 +231,11 @@ final class Client
 
     /**
      * @param array<string,mixed> $dnsConfig `{rrtypes, matchMode, expectedValues, triggerOn?}`
-     * @return array<mixed>
+     * @return array<mixed> the DNS monitor row; with `deduplicated: true` when the API named an existing one (409)
      */
     public function createDnsMonitor(string $customerPublicId, string $name, string $hostname, array $dnsConfig): array
     {
-        return $this->object('POST', '/api/dns-monitors', [
+        return $this->createOrExisting('/api/dns-monitors', [
             'customerId' => $customerPublicId,
             'name' => $name,
             'hostname' => $hostname,
@@ -317,6 +324,27 @@ final class Client
     }
 
     // ---- internals ----------------------------------------------------------------
+
+    /**
+     * POST that answers 409 `monitorAlreadyExists` for the same target, type and customer (docs/api-surface.md): the
+     * existing monitor is read and returned with `deduplicated: true`, the shape domain and IP create already have,
+     * so the caller adopts it. `allowDuplicate` is never sent: a second monitor on the same target is not wanted.
+     *
+     * @param array<string,mixed> $body
+     * @return array<mixed>
+     */
+    private function createOrExisting(string $path, array $body): array
+    {
+        try {
+            return $this->object('POST', $path, $body);
+        } catch (ApiException $e) {
+            $existing = $e->data['existingPublicId'] ?? null;
+            if ($e->status !== 409 || $e->errorCode !== self::MONITOR_EXISTS_CODE || !is_string($existing) || $existing === '') {
+                throw $e;
+            }
+            return ['deduplicated' => true] + $this->object('GET', $path . '/' . rawurlencode($existing));
+        }
+    }
 
     /** @return array{incidents: list<array<string,mixed>>, complete: bool} */
     private function walkIncidents(int $maxPages): array
@@ -461,10 +489,26 @@ final class Client
         return $data;
     }
 
-    /** @return list<array<string,mixed>> */
+    /**
+     * An unpaged list in either form: the plain array, or `{items, total, page, perPage}`, which `?envelope=items`
+     * asks for and which becomes the default (docs/api-surface.md). The envelope is one page with every row today;
+     * one that holds fewer rows than its `total` is refused, never returned truncated.
+     * ponytail: no page walk, add one when an API list served here really pages.
+     *
+     * @return list<array<string,mixed>>
+     */
     private function listOf(string $method, string $path): array
     {
-        return self::rows($this->request($method, $path), $method . ' ' . $path);
+        $action = $method . ' ' . $path;
+        $data = $this->request($method, $path);
+        if (!is_array($data) || !array_key_exists('items', $data)) {
+            return self::rows($data, $action);
+        }
+        $rows = self::rows($data['items'], $action);
+        if (is_int($data['total'] ?? null) && $data['total'] > count($rows)) {
+            throw self::invalidResponse($action, 'paged list: ' . count($rows) . ' of ' . $data['total'] . ' rows');
+        }
+        return $rows;
     }
 
     /**
@@ -544,6 +588,6 @@ final class Client
         if ($status === 403 && $code === 'generic' && str_starts_with($statusMessage, self::IP_LIMIT_TEXT)) {
             throw new QuotaExceededException($text, 403, self::IP_LIMIT_CODE);
         }
-        throw new ApiException($text, $status, $code);
+        throw new ApiException($text, $status, $code, null, $data);
     }
 }

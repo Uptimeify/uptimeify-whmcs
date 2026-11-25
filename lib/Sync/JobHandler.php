@@ -56,6 +56,7 @@ class JobHandler
      * `invalidResponse` retries. `packageOrgOnly` is left out: it only answers a package change, which the addon never
      * sends. `invalidUrl` retries too (round 2 review I1): the API's URL check resolves the host, so a
      * domain whose DNS is not set up yet gets the same code as a private target; the job backs off like any other failure.
+     * The target host limits are fatal: only removing monitors on that host or Uptimeify support lifts them.
      */
     public const FATAL_ERRORS = [
         ...Client::QUOTA_ERROR_CODES,
@@ -63,6 +64,7 @@ class JobHandler
         Reconciler::ERROR_NO_DEFAULT_PACKAGE,
         Client::INVALID_PACKAGE_TYPE_CODE,
         Client::SCOPE_FORBIDDEN_CODE,
+        ...Client::TARGET_HOST_LIMIT_CODES,
     ];
 
     private const REASONS = [
@@ -71,6 +73,8 @@ class JobHandler
         Reconciler::ERROR_NO_DEFAULT_PACKAGE => 'no default package configured for new customers',
         Client::INVALID_PACKAGE_TYPE_CODE => 'the default package does not exist in Uptimeify, choose it again',
         Client::SCOPE_FORBIDDEN_CODE => 'the API token is bound to a customer, an organization-wide token is needed',
+        'targetHostMonitorLimitReached' => 'the organization already has the maximum number of monitors on this target host',
+        'targetHostPlatformLimitReached' => 'this target host already has the maximum number of monitors across all Uptimeify customers',
     ];
 
     private const MAX_REASON_MESSAGES = 5;

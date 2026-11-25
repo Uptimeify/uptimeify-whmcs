@@ -9,6 +9,7 @@ namespace WHMCS\Module\Addon\Uptimeify\Api\Exception;
  * API's `data.code` ('' when the response carried none) or a client-side code: 'transport'
  * (network failure), 'invalidResponse' (2xx not in the verified shape), 'invalidRequest' (body not
  * encodable, nothing sent).
+ * `$data` is the error body's `data` object ([] when there was none), e.g. `existingPublicId` of a 409.
  * Named `errorCode`, not `code`: `Exception::$code` cannot be redeclared (preflight T4-1).
  */
 class ApiException extends \RuntimeException
@@ -18,6 +19,8 @@ class ApiException extends \RuntimeException
         public readonly int $status = 0,
         public readonly string $errorCode = '',
         ?\Throwable $previous = null,
+        /** @var array<mixed> */
+        public readonly array $data = [],
     ) {
         parent::__construct($message, $status, $previous);
     }

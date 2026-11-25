@@ -9,7 +9,7 @@ use WHMCS\Database\Capsule;
 /** Read access to tblclients. WHMCS column names stay inside this class (spec §15.2). */
 final class ClientRepository
 {
-    private const COLUMNS = ['id', 'firstname', 'lastname', 'companyname', 'email', 'status'];
+    private const COLUMNS = ['id', 'firstname', 'lastname', 'companyname', 'email', 'status', 'language'];
 
     /** @return array<int,ClientRow> keyed by client id */
     public function all(): array

@@ -190,10 +190,10 @@ final class JobHandlerTest extends DbTestCase
 
     public function testFatalErrorsAreQuotaAndConfigErrorsButNotInvalidUrlOrInvalidResponse(): void
     {
-        foreach ([...Client::QUOTA_ERROR_CODES, 'customerConflict', 'noDefaultPackage', 'invalidPackageType', 'customerScopedTokenForbidden'] as $code) {
+        foreach ([...Client::QUOTA_ERROR_CODES, 'customerConflict', 'noDefaultPackage', 'invalidPackageType', 'customerScopedTokenForbidden', 'targetHostMonitorLimitReached', 'targetHostPlatformLimitReached'] as $code) {
             self::assertContains($code, JobHandler::FATAL_ERRORS);
         }
-        self::assertCount(count(Client::QUOTA_ERROR_CODES) + 4, JobHandler::FATAL_ERRORS);
+        self::assertCount(count(Client::QUOTA_ERROR_CODES) + 6, JobHandler::FATAL_ERRORS);
         self::assertNotContains(Client::INVALID_RESPONSE_CODE, JobHandler::FATAL_ERRORS);
         self::assertNotContains('invalidUrl', JobHandler::FATAL_ERRORS, 'round 2 review I1: a domain that does not resolve yet gets invalidUrl too');
     }
@@ -683,6 +683,40 @@ final class JobHandlerTest extends DbTestCase
         self::assertStringContainsString('site.example', $e->getMessage());
         self::assertSame(1, $e->result->quotaSkipped);
         self::assertSame('activeMonitorLimitReached', self::row('hosting', $h, 'website')['last_error']);
+    }
+
+    public function testTargetHostLimitFailsTheJobFatallyWithItsOwnReason(): void
+    {
+        foreach (['targetHostMonitorLimitReached' => 'the organization already has the maximum', 'targetHostPlatformLimitReached' => 'across all Uptimeify customers'] as $code => $reason) {
+            $h = $this->hosting(strtolower($code) . '.example', 'Active');
+            $this->mapClient();
+            $this->remote([self::customer('c1', $this->client)])
+                ->on('POST', '/api/websites', 403, ['statusCode' => 403, 'statusMessage' => 'Target host limit reached', 'data' => ['code' => $code, 'host' => strtolower($code) . '.example', 'limit' => 100]]);
+
+            $e = $this->expectJobFailure(fn () => $this->runJob('hosting.activate', $h), true, $code);
+
+            self::assertStringContainsString($reason, $e->getMessage());
+            self::assertSame(0, $e->result->quotaSkipped, 'not a quota of the customer');
+            self::assertSame($code, self::row('hosting', $h, 'website')['last_error']);
+        }
+    }
+
+    public function testMonitorAlreadyExistsOnCreateAdoptsTheExistingWebsite(): void
+    {
+        $h = $this->hosting('site.example', 'Active');
+        $this->mapClient();
+        // The list walk missed the website (offset paging), so the job posts and the API names the existing one.
+        $this->remote([self::customer('c1', $this->client)])
+            ->on('POST', '/api/websites', 409, ['statusCode' => 409, 'statusMessage' => 'A monitor for this target already exists for this customer.', 'data' => ['code' => 'monitorAlreadyExists', 'existingId' => 11, 'existingPublicId' => 'w-old']])
+            ->on('GET', '/api/websites/w-old', 200, self::website('w-old', 11, 'site.example'));
+
+        $result = $this->runJob('hosting.activate', $h);
+
+        self::assertSame([1, 0, 0], [$result->adopted, $result->monitorsCreated, $result->errors]);
+        $row = self::row('hosting', $h, 'website');
+        self::assertSame(['w-old', MonitorMap::STATE_ACTIVE, MonitorMap::ORIGIN_ADOPTED, null], [$row['monitor_public_id'], $row['state'], $row['origin'], $row['last_error']]);
+        self::assertCount(1, $this->sent('POST', '/api/websites'), 'no second create');
+        self::assertSame(['monitorType' => 'website', 'monitorId' => 11, 'tagId' => 1], self::body($this->sent('POST', '/api/monitor-tags')[0]));
     }
 
     public function testInvalidUrlFailsTheJobForARetry(): void

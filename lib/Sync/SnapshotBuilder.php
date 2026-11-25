@@ -15,7 +15,7 @@ use WHMCS\Module\Addon\Uptimeify\Store\Schema;
  * A client snapshot lists the monitor_map rows of the client's mapped customer, once per remote monitor, and only
  * when the remote monitor really belongs to that customer (spec §10: never show another customer's monitor, even
  * if a map row is stale). Field names per docs/api-surface.md: uptime values arrive as strings, avg response as
- * int ms, domain expiry under `expiry`, DNSBL state under `dnsbl`, incident start as `started_at`.
+ * int ms, domain expiry under `expiry`, DNSBL state under `dnsbl`, incident start as `startedAt` (the snake_case twins `started_at` / `resolved_at` go on 18.01.2027 and are only the fallback).
  */
 final class SnapshotBuilder
 {
@@ -23,7 +23,7 @@ final class SnapshotBuilder
     private const PAUSED_STATUSES = ['inactive', 'paused', 'disabled'];
 
     /**
-     * An incident is open while `status` is `open` or `acknowledged` and `resolved_at` is null (how the dashboard
+     * An incident is open while `status` is `open` or `acknowledged` and `resolvedAt` is null (how the dashboard
      * counts it, docs/api-surface.md GET /api/incidents).
      */
     private const OPEN_INCIDENT_STATUSES = ['open', 'acknowledged'];
@@ -105,7 +105,7 @@ final class SnapshotBuilder
         $byMonitor = [];
         $byCustomer = [];
         foreach ($incidents as $incident) {
-            if (!in_array($incident['status'] ?? null, self::OPEN_INCIDENT_STATUSES, true) || ($incident['resolved_at'] ?? null) !== null) {
+            if (!in_array($incident['status'] ?? null, self::OPEN_INCIDENT_STATUSES, true) || ($incident['resolvedAt'] ?? $incident['resolved_at'] ?? null) !== null) {
                 continue;
             }
             $monitorId = self::string(self::nested($incident, 'website', 'publicId'));
@@ -125,7 +125,7 @@ final class SnapshotBuilder
                 'publicId' => self::string($incident['publicId'] ?? null),
                 'title' => self::string($incident['title'] ?? null),
                 'status' => self::string($incident['status'] ?? null),
-                'startedAt' => self::string($incident['started_at'] ?? null),
+                'startedAt' => self::string($incident['startedAt'] ?? $incident['started_at'] ?? null),
                 'monitorPublicId' => $monitorId,
                 'monitorName' => self::string($monitorName),
                 'customerPublicId' => $customerId,
